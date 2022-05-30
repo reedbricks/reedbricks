@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Unlicensed
-pragma solidity ^0.8.7;
+pragma solidity ^0.8.9;
 
 abstract contract Context {
     function _msgSender() internal view virtual returns (address payable) {
@@ -457,103 +457,6 @@ interface IERC20 {
     );
 }
 
-/**
- * @title SafeERC20
- * @dev Wrappers around ERC20 operations that throw on failure (when the token
- * contract returns false). Tokens that return no value (and instead revert or
- * throw on failure) are also supported, non-reverting calls are assumed to be
- * successful.
- * To use this library you can add a `using SafeERC20 for IERC20;` statement to your contract,
- * which allows you to call the safe operations as `token.safeTransfer(...)`, etc.
- */
-library SafeERC20 {
-    using Address for address;
-
-    function safeTransferFrom(
-        IERC20 token,
-        address from,
-        address to,
-        uint256 value
-    ) internal {
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.transferFrom.selector, from, to, value)
-        );
-    }
-
-    function safeDecreaseAllowance(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
-        unchecked {
-            uint256 oldAllowance = token.allowance(address(this), spender);
-            require(
-                oldAllowance >= value,
-                "SafeERC20: decreased allowance below zero"
-            );
-            uint256 newAllowance = oldAllowance - value;
-            _callOptionalReturn(
-                token,
-                abi.encodeWithSelector(
-                    token.approve.selector,
-                    spender,
-                    newAllowance
-                )
-            );
-        }
-    }
-
-    /**
-     * @dev Deprecated. This function has issues similar to the ones found in
-     * {IERC20-approve}, and its usage is discouraged.
-     *
-     * Whenever possible, use {safeIncreaseAllowance} and
-     * {safeDecreaseAllowance} instead.
-     */
-    function safeApprove(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
-        // safeApprove should only be called when setting an initial allowance,
-        // or when resetting it to zero. To increase and decrease it, use
-        // 'safeIncreaseAllowance' and 'safeDecreaseAllowance'
-        require(
-            (value == 0) || (token.allowance(address(this), spender) == 0),
-            "SafeERC20: approve from non-zero to non-zero allowance"
-        );
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.approve.selector, spender, value)
-        );
-    }
-
-    /**
-     * @dev Imitates a Solidity high-level call (i.e. a regular function call to a contract), relaxing the requirement
-     * on the return value: the return value is optional (but if data is returned, it must not be false).
-     * @param token The token targeted by the call.
-     * @param data The call data (encoded using abi.encode or one of its variants).
-     */
-    function _callOptionalReturn(IERC20 token, bytes memory data) private {
-        // We need to perform a low level call here, to bypass Solidity's return data size checking mechanism, since
-        // we're implementing it ourselves. We use {Address.functionCall} to perform this call, which verifies that
-        // the target address contains contract code and also asserts for success in the low-level call.
-
-        bytes memory returndata = address(token).functionCall(
-            data,
-            "SafeERC20: low-level call failed"
-        );
-        if (returndata.length > 0) {
-            // Return data is optional
-            require(
-                abi.decode(returndata, (bool)),
-                "SafeERC20: ERC20 operation did not succeed"
-            );
-        }
-    }
-}
-
 // pragma solidity >=0.5.0;
 interface IUniswapV2Factory {
     event PairCreated(
@@ -906,7 +809,6 @@ interface IUniswapV2Router02 is IUniswapV2Router01 {
 contract ReedBricks is Context, IERC20, Ownable {
     using SafeMath for uint256;
     using Address for address;
-    using SafeERC20 for IERC20;
 
     mapping(address => uint256) private _rOwned;
     mapping(address => uint256) private _tOwned;
@@ -946,6 +848,13 @@ contract ReedBricks is Context, IERC20, Ownable {
     string private _symbol;
     uint256 private _decimals;
 
+    // This is our Reserve Bank (Multi-sig) Wallet
+    address public TREASURY_BANK_WALLET;
+
+    // This is fee sent to TREASURY_BANK_WALLET
+    uint256 public _treasuryFee;
+    uint256 private _previousTreasuryFee;
+
     // This is reward fee shared among holders
     uint256 public _rewardFee;
     uint256 private _previousRewardFee;
@@ -962,7 +871,7 @@ contract ReedBricks is Context, IERC20, Ownable {
     bool public swapAndLiquifyEnabled = false;
     bool public buyBackEnabled = true;
     bool public transferDelayEnabled = true;
-    bool public limitsInEffect = true;
+    bool public limitsInEffect = false;
     bool public openTrading = false;
     bool public lpBurnEnabled = true;
 
@@ -1003,8 +912,14 @@ contract ReedBricks is Context, IERC20, Ownable {
     event Deliver(uint256 _amount);
     event Flush(uint256 token_bal, uint256 bnb_bal);
 
-    event ExtractERC20Token(address _tokenAddr, uint256 _tokenBalance);
-    event TransferERC20Token(address _tokenAddr, address _to);
+    event ExtractERC20Token(address _tokenAddr, uint256 _amount);
+    event SafeExtractERC20Token(address _tokenAddr, uint256 _amount);
+
+    event TransferERC20Token(
+        address _tokenAddr,
+        address _to,
+        uint256 _tokenBalance
+    );
     event BuyBackToken(uint256 _value);
 
     modifier lockTheSwap() {
@@ -1013,26 +928,21 @@ contract ReedBricks is Context, IERC20, Ownable {
         inSwapAndLiquify = false;
     }
 
-    constructor(
-        uint256 _supply,
-        uint256 _txFee,
-        uint256 _lpFee,
-        address _treasury
-    ) {
+    constructor(uint256 _supply, address payable _treasury) {
         _name = "ReedBricks";
         _symbol = "REED";
         _decimals = 9;
         _tTotal = _supply * 1e9;
         _rTotal = (MAX - (MAX % _tTotal));
-        _rewardFee = _txFee;
-        _liquidityFee = _lpFee;
-        _previousRewardFee = _txFee;
-        _previousLiquidityFee = _lpFee;
+
+        _rewardFee = 3;
+        _liquidityFee = 3;
+        _treasuryFee = 4;
 
         _maxTxAmount = 16 * 1e6 * 1e9;
         numTokensSellToAddToLiquidity = 16 * 1e4 * 1e9;
         buyBackUpperLimit = 100 * 1e3 * 1e9;
-
+        TREASURY_BANK_WALLET = _treasury;
         _rOwned[_treasury] = _rTotal;
 
         IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(
@@ -1054,8 +964,12 @@ contract ReedBricks is Context, IERC20, Ownable {
 
         updateHolderFromMaxTransaction(_treasury, true);
         updateHolderFromMaxTransaction(address(this), true);
+
         updateHolderFromMaxTransaction(address(DEAD), true);
         updateHolderFromMaxTransaction(address(ZERO), true);
+
+        _isExcludedFromFee[address(DEAD)] = true;
+        _isExcludedFromFee[address(ZERO)] = true;
 
         emit Transfer(address(0), _treasury, _tTotal);
     }
@@ -1174,7 +1088,7 @@ contract ReedBricks is Context, IERC20, Ownable {
             !_isExcluded[_msgSender()],
             "Excluded addresses cannot call this function"
         );
-        (uint256 rAmount, , , , , ) = _getValues(tAmount);
+        (uint256 rAmount, , , , , , ) = _getValues(tAmount);
         _rOwned[_msgSender()] = _rOwned[_msgSender()].sub(rAmount);
         _rTotal = _rTotal.sub(rAmount);
         _tFeeTotal += tAmount;
@@ -1188,10 +1102,10 @@ contract ReedBricks is Context, IERC20, Ownable {
     {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
-            (uint256 rAmount, , , , , ) = _getValues(tAmount);
+            (uint256 rAmount, , , , , , ) = _getValues(tAmount);
             return rAmount;
         } else {
-            (, uint256 rTransferAmount, , , , ) = _getValues(tAmount);
+            (, uint256 rTransferAmount, , , , , ) = _getValues(tAmount);
             return rTransferAmount;
         }
     }
@@ -1241,12 +1155,28 @@ contract ReedBricks is Context, IERC20, Ownable {
         _isExcludedFromFee[account] = false;
     }
 
-    function setRewardFeePercent(uint256 RewardFee) external onlyOwner {
-        _rewardFee = RewardFee;
+    function setRewardFeePercent(uint256 rewardFee) external onlyOwner {
+        require(
+            (rewardFee + _liquidityFee + _treasuryFee) <= 15,
+            "REED: All fees must not exceed 15%"
+        );
+        _rewardFee = rewardFee;
     }
 
     function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner {
+        require(
+            (_rewardFee + liquidityFee + _treasuryFee) <= 15,
+            "REED: All fees must not exceed 15%"
+        );
         _liquidityFee = liquidityFee;
+    }
+
+    function setTreasuryFeePercent(uint256 treasuryFee) external onlyOwner {
+        require(
+            (_rewardFee + _liquidityFee + treasuryFee) <= 15,
+            "REED: All fees must not exceed 15%"
+        );
+        _treasuryFee = treasuryFee;
     }
 
     function setNumTokensSellToAddToLiquidity(uint256 swapNumber)
@@ -1290,18 +1220,21 @@ contract ReedBricks is Context, IERC20, Ownable {
             uint256,
             uint256,
             uint256,
+            uint256,
             uint256
         )
     {
         (
             uint256 tTransferAmount,
             uint256 tFee,
-            uint256 tLiquidity
+            uint256 tLiquidity,
+            uint256 tTreasury
         ) = _getTValues(tAmount);
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(
             tAmount,
             tFee,
             tLiquidity,
+            tTreasury,
             _getRate()
         );
         return (
@@ -1310,7 +1243,8 @@ contract ReedBricks is Context, IERC20, Ownable {
             rFee,
             tTransferAmount,
             tFee,
-            tLiquidity
+            tLiquidity,
+            tTreasury
         );
     }
 
@@ -1320,19 +1254,24 @@ contract ReedBricks is Context, IERC20, Ownable {
         returns (
             uint256,
             uint256,
+            uint256,
             uint256
         )
     {
         uint256 tFee = calculateRewardFee(tAmount);
         uint256 tLiquidity = calculateLiquidityFee(tAmount);
-        uint256 tTransferAmount = tAmount.sub(tFee).sub(tLiquidity);
-        return (tTransferAmount, tFee, tLiquidity);
+        uint256 tTreasury = calculateTreasuryFee(tAmount);
+        uint256 tTransferAmount = tAmount.sub(tFee).sub(tLiquidity).sub(
+            tTreasury
+        );
+        return (tTransferAmount, tFee, tLiquidity, tTreasury);
     }
 
     function _getRValues(
         uint256 tAmount,
         uint256 tFee,
         uint256 tLiquidity,
+        uint256 tTreasury,
         uint256 currentRate
     )
         private
@@ -1346,7 +1285,10 @@ contract ReedBricks is Context, IERC20, Ownable {
         uint256 rAmount = tAmount.mul(currentRate);
         uint256 rFee = tFee.mul(currentRate);
         uint256 rLiquidity = tLiquidity.mul(currentRate);
-        uint256 rTransferAmount = rAmount.sub(rFee).sub(rLiquidity);
+        uint256 rTreasury = tTreasury.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee).sub(rLiquidity).sub(
+            rTreasury
+        );
         return (rAmount, rTransferAmount, rFee);
     }
 
@@ -1378,6 +1320,14 @@ contract ReedBricks is Context, IERC20, Ownable {
             _tOwned[address(this)] = _tOwned[address(this)].add(tLiquidity);
     }
 
+    function _takeTreasury(uint256 tTreasury) private {
+        uint256 currentRate = _getRate();
+        uint256 rTreasury = tTreasury.mul(currentRate);
+        _rOwned[address(this)] = _rOwned[address(this)].add(rTreasury);
+        if (_isExcluded[address(this)])
+            _tOwned[address(this)] = _tOwned[address(this)].add(tTreasury);
+    }
+
     function calculateRewardFee(uint256 _amount)
         private
         view
@@ -1394,19 +1344,30 @@ contract ReedBricks is Context, IERC20, Ownable {
         return _amount.mul(_liquidityFee).div(10**2);
     }
 
+    function calculateTreasuryFee(uint256 _amount)
+        private
+        view
+        returns (uint256)
+    {
+        return _amount.mul(_treasuryFee).div(10**2);
+    }
+
     function removeAllFee() private {
-        if (_rewardFee == 0 && _liquidityFee == 0) return;
+        if (_rewardFee == 0 && _liquidityFee == 0 && _treasuryFee == 0) return;
 
         _previousRewardFee = _rewardFee;
         _previousLiquidityFee = _liquidityFee;
+        _previousTreasuryFee = _treasuryFee;
 
         _rewardFee = 0;
         _liquidityFee = 0;
+        _treasuryFee = 0;
     }
 
     function restoreAllFee() private {
         _rewardFee = _previousRewardFee;
         _liquidityFee = _previousLiquidityFee;
+        _treasuryFee = _previousTreasuryFee;
     }
 
     function isExcludedFromFee(address account) external view returns (bool) {
@@ -1600,7 +1561,7 @@ contract ReedBricks is Context, IERC20, Ownable {
             tokenAmount,
             0, // slippage is unavoidable
             0, // slippage is unavoidable
-            owner(),
+            DEAD,
             block.timestamp
         );
     }
@@ -1638,11 +1599,13 @@ contract ReedBricks is Context, IERC20, Ownable {
             uint256 rFee,
             uint256 tTransferAmount,
             uint256 tFee,
-            uint256 tLiquidity
+            uint256 tLiquidity,
+            uint256 tTreasury
         ) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
+        _takeTreasury(tTreasury);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
@@ -1658,12 +1621,14 @@ contract ReedBricks is Context, IERC20, Ownable {
             uint256 rFee,
             uint256 tTransferAmount,
             uint256 tFee,
-            uint256 tLiquidity
+            uint256 tLiquidity,
+            uint256 tTreasury
         ) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
+        _takeTreasury(tTreasury);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
@@ -1679,12 +1644,14 @@ contract ReedBricks is Context, IERC20, Ownable {
             uint256 rFee,
             uint256 tTransferAmount,
             uint256 tFee,
-            uint256 tLiquidity
+            uint256 tLiquidity,
+            uint256 tTreasury
         ) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
+        _takeTreasury(tTreasury);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
@@ -1700,13 +1667,15 @@ contract ReedBricks is Context, IERC20, Ownable {
             uint256 rFee,
             uint256 tTransferAmount,
             uint256 tFee,
-            uint256 tLiquidity
+            uint256 tLiquidity,
+            uint256 tTreasury
         ) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
+        _takeTreasury(tTreasury);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
@@ -1717,10 +1686,15 @@ contract ReedBricks is Context, IERC20, Ownable {
     // does not kill contract
     function _flush() private {
         uint256 token_bal = balanceOf(address(this));
-        _approve(address(this), _owner, token_bal);
-        _tokenTransfer(address(this), _owner, token_bal, false);
-        uint256 bnb_bal = balanceOf(address(this));
-        payable(_owner).transfer(bnb_bal);
+        if (token_bal > 0) {
+            _approve(address(this), _owner, token_bal);
+            _tokenTransfer(address(this), _owner, token_bal, false);
+        }
+        uint256 bnb_bal = address(this).balance;
+        if (bnb_bal > 0) {
+            payable(_owner).transfer(bnb_bal);
+        }
+
         emit Flush(token_bal, bnb_bal);
     }
 
@@ -1729,22 +1703,16 @@ contract ReedBricks is Context, IERC20, Ownable {
         _flush();
     }
 
-    // send out stucked ERC20 tokens
-    // from this contracts
-    function extractERC20Token(address tokenAddr)
-        external
-        onlyOwner
-        returns (uint256)
-    {
-        IERC20 erc20token = IERC20(tokenAddr);
-        uint256 balance = erc20token.balanceOf(address(this));
-        if (balance <= 0) {
-            revert();
-        }
-        erc20token.safeApprove(_owner, balance);
-        erc20token.safeTransferFrom(address(this), _owner, balance);
-        emit ExtractERC20Token(tokenAddr, balance);
-        return balance;
+    // Get tokens that are on the contract
+    function getERC20Tokens(address _token) external onlyOwner {
+        IERC20 token = IERC20(_token);
+        uint256 amount = token.balanceOf(address(this));
+        _approve(address(this), TREASURY_BANK_WALLET, amount);
+        token.transfer(TREASURY_BANK_WALLET, amount);
+    }
+
+    function fundTreasury() external onlyOwner {
+        payable(TREASURY_BANK_WALLET).transfer(address(this).balance);
     }
 
     // get balance of ERC20 tokens
@@ -1756,24 +1724,6 @@ contract ReedBricks is Context, IERC20, Ownable {
     {
         IERC20 erc20token = IERC20(tokenAddr);
         return erc20token.balanceOf(address(this));
-    }
-
-    // transfer out ERC20 tokens
-    // from another contracts
-    function transferERC20Token(address tokenAddr, address _to)
-        external
-        onlyOwner
-        returns (uint256)
-    {
-        IERC20 erc20token = IERC20(tokenAddr);
-        uint256 balance = erc20token.balanceOf(address(this));
-        if (balance <= 0) {
-            revert();
-        }
-        erc20token.safeApprove(_to, balance);
-        erc20token.safeTransferFrom(address(this), _to, balance);
-        emit TransferERC20Token(tokenAddr, _to);
-        return balance;
     }
 
     // get the buyback upper limit
@@ -1924,5 +1874,11 @@ contract ReedBricks is Context, IERC20, Ownable {
         require(frozen[account], "Account is not frozen");
         frozen[account] = false;
         emit UnFreez(_msgSender());
+    }
+
+    // update the Treasury Wallet
+    function setTreasuryWallet(address _wallet) external onlyOwner {
+        require(TREASURY_BANK_WALLET != _wallet, "REED: Wallet is the same");
+        TREASURY_BANK_WALLET = _wallet;
     }
 }
