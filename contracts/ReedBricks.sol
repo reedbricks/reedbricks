@@ -897,13 +897,6 @@ contract ReedBricks is Context, IERC20, Ownable {
     );
     event BuyBackEnabledUpdated(bool _enabled);
     event SetAutomatedMarketMakerPair(address indexed pair, bool indexed value);
-
-    event AutoBurnLP();
-    event ManualBurnLP();
-
-    event Freez(address account);
-    event UnFreez(address account);
-    event Deliver(uint256 _amount);
     event FlushReed(uint256 token_bal);
     event Flush(uint256 bnb_bal);
     event BuyBackToken(uint256 _value);
