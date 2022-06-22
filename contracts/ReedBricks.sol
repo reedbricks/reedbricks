@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Unlicensed
-pragma solidity ^0.8.9;
+pragma solidity ^0.8.8;
 
 abstract contract Context {
     function _msgSender() internal view virtual returns (address payable) {
@@ -152,6 +152,7 @@ library SafeMath {
  */
 contract Ownable is Context {
     address public _owner;
+    address public treasurer;
     address private _previousOwner;
     uint256 private _lockTime;
 
@@ -159,6 +160,7 @@ contract Ownable is Context {
         address indexed previousOwner,
         address indexed newOwner
     );
+    event TreasurySinged(address _signer);
 
     constructor() {
         _owner = _msgSender();
@@ -455,130 +457,6 @@ interface IERC20 {
         address indexed spender,
         uint256 value
     );
-}
-
-/**
- * @title SafeERC20
- * @dev Wrappers around ERC20 operations that throw on failure (when the token
- * contract returns false). Tokens that return no value (and instead revert or
- * throw on failure) are also supported, non-reverting calls are assumed to be
- * successful.
- * To use this library you can add a `using SafeERC20 for IERC20;` statement to your contract,
- * which allows you to call the safe operations as `token.safeTransfer(...)`, etc.
- */
-library SafeERC20 {
-    using Address for address;
-
-    function safeTransfer(
-        IERC20 token,
-        address to,
-        uint256 value
-    ) internal {
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.transfer.selector, to, value)
-        );
-    }
-
-    function safeTransferFrom(
-        IERC20 token,
-        address from,
-        address to,
-        uint256 value
-    ) internal {
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.transferFrom.selector, from, to, value)
-        );
-    }
-
-    /**
-     * @dev Deprecated. This function has issues similar to the ones found in
-     * {IERC20-approve}, and its usage is discouraged.
-     *
-     * Whenever possible, use {safeIncreaseAllowance} and
-     * {safeDecreaseAllowance} instead.
-     */
-    function safeApprove(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
-        // safeApprove should only be called when setting an initial allowance,
-        // or when resetting it to zero. To increase and decrease it, use
-        // 'safeIncreaseAllowance' and 'safeDecreaseAllowance'
-        require(
-            (value == 0) || (token.allowance(address(this), spender) == 0),
-            "SafeERC20: approve from non-zero to non-zero allowance"
-        );
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(token.approve.selector, spender, value)
-        );
-    }
-
-    function safeIncreaseAllowance(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
-        uint256 newAllowance = token.allowance(address(this), spender) + value;
-        _callOptionalReturn(
-            token,
-            abi.encodeWithSelector(
-                token.approve.selector,
-                spender,
-                newAllowance
-            )
-        );
-    }
-
-    function safeDecreaseAllowance(
-        IERC20 token,
-        address spender,
-        uint256 value
-    ) internal {
-        unchecked {
-            uint256 oldAllowance = token.allowance(address(this), spender);
-            require(
-                oldAllowance >= value,
-                "SafeERC20: decreased allowance below zero"
-            );
-            uint256 newAllowance = oldAllowance - value;
-            _callOptionalReturn(
-                token,
-                abi.encodeWithSelector(
-                    token.approve.selector,
-                    spender,
-                    newAllowance
-                )
-            );
-        }
-    }
-
-    /**
-     * @dev Imitates a Solidity high-level call (i.e. a regular function call to a contract), relaxing the requirement
-     * on the return value: the return value is optional (but if data is returned, it must not be false).
-     * @param token The token targeted by the call.
-     * @param data The call data (encoded using abi.encode or one of its variants).
-     */
-    function _callOptionalReturn(IERC20 token, bytes memory data) private {
-        // We need to perform a low level call here, to bypass Solidity's return data size checking mechanism, since
-        // we're implementing it ourselves. We use {Address.functionCall} to perform this call, which verifies that
-        // the target address contains contract code and also asserts for success in the low-level call.
-
-        bytes memory returndata = address(token).functionCall(
-            data,
-            "SafeERC20: low-level call failed"
-        );
-        if (returndata.length > 0) {
-            // Return data is optional
-            require(
-                abi.decode(returndata, (bool)),
-                "SafeERC20: ERC20 operation did not succeed"
-            );
-        }
-    }
 }
 
 // pragma solidity >=0.5.0;
@@ -934,7 +812,6 @@ contract ReedBricks is Context, IERC20, Ownable {
     // useful application libraries
     using SafeMath for uint256;
     using Address for address;
-    using SafeERC20 for IERC20;
 
     mapping(address => uint256) private _rOwned;
     mapping(address => uint256) private _tOwned;
@@ -965,16 +842,9 @@ contract ReedBricks is Context, IERC20, Ownable {
 
     // Token information
     // name, symbol, decimal
-    string private _name;
-    string private _symbol;
-    uint256 private _decimals;
-
-    // This is our Reserve Bank (Multi-sig) Wallet
-    // only the treasurer recieves or spends
-    // fundings in the wallet and must be
-    // signed by [owner], [treasurer], and [developer]
-    address public treasurer;
-    address public developer;
+    string public _name;
+    string public _symbol;
+    uint256 public _decimals;
 
     // This is fee sent to treasurer
     // All developements and marketing will be
@@ -1001,7 +871,6 @@ contract ReedBricks is Context, IERC20, Ownable {
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = false;
     bool public buyBackEnabled = true;
-    bool public lpBurnEnabled = true;
 
     // amount that must be held in contract to trigger
     // a buyback operation required for Token rebase
@@ -1010,41 +879,8 @@ contract ReedBricks is Context, IERC20, Ownable {
     // activities in the token until stability is achived
     uint256 public numTokensSellToAddToLiquidity;
 
-    // buyback to ensure token stability is maintained
-    uint256 public percentForLPBurn;
-    uint256 public lastLpBurnTime;
-
-    // to burn LP manually, a space of 3600 mins must be allowed
-    uint256 public burnFrequency = 3600 minutes;
-    uint256 public lastManualLpBurnTime;
-
-    // Array of frozen accounts against time (in days)
-    mapping(address => bool) public frozen;
-
-    // Owner, Treasurer & Developer are Signers
-    // both must sign for some Contract based
-    // transactions to occur or to use TREASURY
-    mapping(address => bool) public _signers;
-
     //Max % of Supply allowed for sell
     uint256 public maxTxPercent;
-
-    // check if sender can sign
-    modifier canSign() {
-        require(isSigner(_msgSender()), "REED: Not an authorised signer");
-        _;
-    }
-
-    // check if all signers has signed
-    modifier whenSigned() {
-        require(
-            _signers[_owner] && _signers[treasurer] && _signers[developer],
-            "REED: All three ADMIN parties must sign"
-        );
-        _;
-        _signers[treasurer] = false;
-        _signers[developer] = false;
-    }
 
     modifier lockTheSwap() {
         inSwapAndLiquify = true;
@@ -1068,54 +904,36 @@ contract ReedBricks is Context, IERC20, Ownable {
     event Freez(address account);
     event UnFreez(address account);
     event Deliver(uint256 _amount);
-    event Flush(uint256 token_bal, uint256 bnb_bal);
-
-    event ExtractERC20Token(address _tokenAddr, uint256 _amount);
-    event SafeExtractERC20Token(address _tokenAddr, uint256 _amount);
-
-    event TransferERC20Token(
-        address _tokenAddr,
-        address _to,
-        uint256 _tokenBalance
-    );
+    event FlushReed(uint256 token_bal);
+    event Flush(uint256 bnb_bal);
     event BuyBackToken(uint256 _value);
-    event TreasurySinged(address _signer);
 
-    constructor(
-        uint256 _supply,
-        address payable _treasury,
-        address _developer,
-        address _router
-    ) {
-        _name = "TRIGIO";
-        _symbol = "TRIGIO";
+    constructor(uint256 _supply, address payable _treasury) {
+        _name = "ReedBricks";
+        _symbol = "REED";
         _decimals = 9;
         _tTotal = _supply * 1e9;
         _rTotal = (MAX - (MAX % _tTotal));
 
         _rewardFee = 3;
-        _liquidityFee = 3;
-        _treasuryFee = 4;
+        _liquidityFee = 2;
+        _treasuryFee = 5;
 
         maxTxPercent = 1;
         numTokensSellToAddToLiquidity = 16 * 1e4 * 1e9;
         buyBackUpperLimit = 100 * 1e3 * 1e9;
-        percentForLPBurn = 10;
 
-        treasurer = _treasury;
-        developer = _developer;
+        _rOwned[treasurer] = _rTotal;
+        emit Transfer(address(0), treasurer, _tTotal);
 
-        _rOwned[_treasury] = _rTotal;
-
-        // instantiate signers
-        _signers[_owner] = true;
-
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(_router);
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(
+            0x10ED43C718714eb63d5aA57B78B54704E256024E
+        );
 
         // Create a uniswap pair for this new token
         uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory())
             .createPair(address(this), _uniswapV2Router.WETH());
-        _setAutomatedMarketMakerPair(address(uniswapV2Pair), true);
+        automatedMarketMakerPairs[address(uniswapV2Pair)] = true;
 
         // set the rest of the contract variables
         uniswapV2Router = _uniswapV2Router;
@@ -1125,24 +943,6 @@ contract ReedBricks is Context, IERC20, Ownable {
         _isExcludedFromFee[address(this)] = true;
         _isExcludedFromFee[address(DEAD)] = true;
         _isExcludedFromFee[address(ZERO)] = true;
-
-        emit Transfer(address(0), _treasury, _tTotal);
-    }
-
-    function updateName(string memory newName) public onlyOwner {
-        _name = newName;
-    }
-
-    function name() external view returns (string memory) {
-        return _name;
-    }
-
-    function symbol() external view returns (string memory) {
-        return _symbol;
-    }
-
-    function decimals() external view returns (uint256) {
-        return _decimals;
     }
 
     function totalSupply() external view override returns (uint256) {
@@ -1198,35 +998,6 @@ contract ReedBricks is Context, IERC20, Ownable {
         return true;
     }
 
-    function increaseAllowance(address spender, uint256 addedValue)
-        external
-        virtual
-        returns (bool)
-    {
-        _approve(
-            _msgSender(),
-            spender,
-            _allowances[_msgSender()][spender].add(addedValue)
-        );
-        return true;
-    }
-
-    function decreaseAllowance(address spender, uint256 subtractedValue)
-        external
-        virtual
-        returns (bool)
-    {
-        _approve(
-            _msgSender(),
-            spender,
-            _allowances[_msgSender()][spender].sub(
-                subtractedValue,
-                "ERC20: decreased allowance below zero"
-            )
-        );
-        return true;
-    }
-
     function isExcludedFromReward(address account)
         external
         view
@@ -1238,20 +1009,6 @@ contract ReedBricks is Context, IERC20, Ownable {
     // Sum of all fees accummulated
     function totalFees() external view returns (uint256) {
         return _tFeeTotal;
-    }
-
-    // sender can give up reward tokens for the pool
-    // other holders' rewards will be increased
-    function deliver(uint256 tAmount) external {
-        require(
-            !_isExcludedFromReward[_msgSender()],
-            "Excluded addresses cannot call this function"
-        );
-        (uint256 rAmount, , , , , , ) = _getValues(tAmount);
-        _rOwned[_msgSender()] = _rOwned[_msgSender()].sub(rAmount);
-        _rTotal = _rTotal.sub(rAmount);
-        _tFeeTotal += tAmount;
-        emit Deliver(tAmount);
     }
 
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee)
@@ -1282,7 +1039,7 @@ contract ReedBricks is Context, IERC20, Ownable {
         return rAmount.div(currentRate);
     }
 
-    function excludeFromReward(address account) external onlyOwner whenSigned {
+    function excludeFromReward(address account) external onlyOwner {
         require(
             _isExcludedFromReward[account],
             "REED: Account is already excluded"
@@ -1294,7 +1051,7 @@ contract ReedBricks is Context, IERC20, Ownable {
         _excluded.push(account);
     }
 
-    function includeInReward(address account) external onlyOwner whenSigned {
+    function includeInReward(address account) external onlyOwner {
         require(
             !_isExcludedFromReward[account],
             "REED: Account is already included"
@@ -1310,11 +1067,7 @@ contract ReedBricks is Context, IERC20, Ownable {
         }
     }
 
-    function setRewardFeePercent(uint256 rewardFee)
-        external
-        onlyOwner
-        whenSigned
-    {
+    function setRewardFeePercent(uint256 rewardFee) external onlyOwner {
         require(
             (rewardFee + _liquidityFee + _treasuryFee) <= feeCap,
             "REED: All fees must not exceed feeCap"
@@ -1322,11 +1075,7 @@ contract ReedBricks is Context, IERC20, Ownable {
         _rewardFee = rewardFee;
     }
 
-    function setLiquidityFeePercent(uint256 liquidityFee)
-        external
-        onlyOwner
-        whenSigned
-    {
+    function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner {
         require(
             (_rewardFee + liquidityFee + _treasuryFee) <= feeCap,
             "REED: All fees must not exceed feeCap"
@@ -1334,11 +1083,7 @@ contract ReedBricks is Context, IERC20, Ownable {
         _liquidityFee = liquidityFee;
     }
 
-    function setTreasuryFeePercent(uint256 treasuryFee)
-        external
-        onlyOwner
-        whenSigned
-    {
+    function setTreasuryFeePercent(uint256 treasuryFee) external onlyOwner {
         require(
             (_rewardFee + _liquidityFee + treasuryFee) <= feeCap,
             "REED: All fees must not exceed feeCap"
@@ -1354,11 +1099,7 @@ contract ReedBricks is Context, IERC20, Ownable {
     }
 
     // We update transaction limit information
-    function setMaxSellTransactionAmount(uint256 _maxTxPercent)
-        external
-        onlyOwner
-        whenSigned
-    {
+    function setMaxSellTransactionAmount(uint256 _maxTxPercent) external {
         require(
             _maxTxPercent >= 1 && _maxTxPercent <= 100,
             "REED: 1% to 100% only"
@@ -1376,7 +1117,6 @@ contract ReedBricks is Context, IERC20, Ownable {
         emit SwapAndLiquifyEnabledUpdated(_enabled);
     }
 
-    //to recieve ETH from uniswapV2Router when swaping
     receive() external payable {}
 
     function _reflectFee(uint256 rFee, uint256 tFee) private {
@@ -1525,6 +1265,7 @@ contract ReedBricks is Context, IERC20, Ownable {
         return _amount.mul(_treasuryFee).div(10**2);
     }
 
+    // remove all fees
     function removeAllFee() private {
         if (_rewardFee == 0 && _liquidityFee == 0 && _treasuryFee == 0) return;
 
@@ -1568,9 +1309,6 @@ contract ReedBricks is Context, IERC20, Ownable {
         require(to != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
 
-        // Check if account is frozen by user
-        require(!frozen[from], "REED: Account is frozen");
-
         // Run this operation for all sell operation
         // check to ensure WHALES
         if (automatedMarketMakerPairs[to] && !_isExcludedFromFee[from]) {
@@ -1604,18 +1342,6 @@ contract ReedBricks is Context, IERC20, Ownable {
             swapAndLiquify(contractTokenBalance);
             //add liquidity
         }
-
-        // Auto Burn LP
-        if (
-            !inSwapAndLiquify &&
-            automatedMarketMakerPairs[to] &&
-            lpBurnEnabled &&
-            block.timestamp >= lastLpBurnTime + burnFrequency &&
-            !_isExcludedFromFee[from]
-        ) {
-            autoBurnLiquidityPairTokens();
-        }
-        // Auto Burn LP
 
         //indicates if fee should be deducted from transfer
         bool takeFee = true;
@@ -1716,7 +1442,6 @@ contract ReedBricks is Context, IERC20, Ownable {
         bool takeFee
     ) private {
         if (!takeFee) removeAllFee();
-
         if (
             _isExcludedFromReward[sender] && !_isExcludedFromReward[recipient]
         ) {
@@ -1831,17 +1556,6 @@ contract ReedBricks is Context, IERC20, Ownable {
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
-    // get balance of ERC20 tokens
-    // from another contracts
-    function balanceOfERC20Token(address tokenAddr)
-        external
-        view
-        returns (uint256)
-    {
-        IERC20 erc20token = IERC20(tokenAddr);
-        return erc20token.balanceOf(address(this));
-    }
-
     // update the buyback upper limit
     function setBuybackUpperLimit(uint256 buyBackLimit) external onlyOwner {
         require(buyBackLimit != buyBackUpperLimit, "REED: No change in amount");
@@ -1862,165 +1576,32 @@ contract ReedBricks is Context, IERC20, Ownable {
         if (amount > 0) {
             swapEthForTokens(amount);
         }
-    }
-
-    // do buy back
-    function buyBackTokens(uint256 amount) external onlyOwner whenSigned {
-        _buyBackTokens(amount);
         emit BuyBackToken(amount);
     }
 
-    // this will help us identify buy/sell trades
-    function setAutomatedMarketMakerPair(address pair, bool value)
-        external
-        onlyOwner
-    {
-        require(
-            pair != uniswapV2Pair,
-            "The pair cannot be removed from automatedMarketMakerPairs"
-        );
-        _setAutomatedMarketMakerPair(pair, value);
-    }
-
-    function _setAutomatedMarketMakerPair(address pair, bool value) private {
-        automatedMarketMakerPairs[pair] = value;
-        emit SetAutomatedMarketMakerPair(pair, value);
-    }
-
-    // Enable/Disable AutoLP Burn
-    function setAutoLPBurn(bool _Enabled) external onlyOwner returns (bool) {
-        require(_Enabled != lpBurnEnabled, "REED: Value is same as old");
-        lpBurnEnabled = _Enabled;
-        return _Enabled;
-    }
-
-    // initialize autoLP settings
-    // lpBurnFrequency and percentForLPBurn
-    function setAutoLPBurnSettings(
-        uint256 _frequencyInSeconds,
-        uint256 _percent
-    ) external onlyOwner {
-        require(
-            _frequencyInSeconds >= 600,
-            "cannot set buyback more often than every 10 minutes"
-        );
-        require(
-            _percent <= 1000 && _percent >= 0,
-            "Must set auto LP burn percent between 0% and 10%"
-        );
-        burnFrequency = _frequencyInSeconds;
-        percentForLPBurn = _percent;
-    }
-
-    // perform auto LP burn
-    // 1. get LP balance
-    // 2. get percentage of it up for burning
-    // 3. check if [amountToBurn] is more than zero
-    // 4. Send this amount to DEAD address to burn
-    // 5. Sync the IUniswapV2Pair pair
-    function autoBurnLiquidityPairTokens() internal returns (bool) {
-        lastLpBurnTime = block.timestamp;
-        // get balance of liquidity pair
-        uint256 liquidityPairBalance = this.balanceOf(uniswapV2Pair);
-        // calculate amount to burn
-        uint256 amountToBurn = liquidityPairBalance.mul(percentForLPBurn).div(
-            10000
-        );
-        // pull tokens from pancakePair liquidity and move to dead address permanently
-        if (amountToBurn > 0) {
-            _transfer(uniswapV2Pair, address(DEAD), amountToBurn);
-            // super._transfer(uniswapV2Pair, address(DEAD), amountToBurn);
-        }
-        //sync price since this is not in a swap transaction!
-        IUniswapV2Pair pair = IUniswapV2Pair(uniswapV2Pair);
-        pair.sync();
-        emit AutoBurnLP();
-        return true;
-    }
-
-    // contractual holders can freez their
-    // accounts from transfers/sell
-    function freezMe() external {
-        require(!frozen[_msgSender()], "Account is already frozen");
-        frozen[_msgSender()] = true;
-        emit Freez(_msgSender());
-    }
-
-    // only admin can unfreez holders
-    function unFreezMe(address account) external onlyOwner whenSigned {
-        require(frozen[account], "Account is not frozen");
-        frozen[account] = false;
-        emit UnFreez(_msgSender());
-    }
-
     // update the Treasury Wallet
-    function setTreasuryWallet(address _wallet) external onlyOwner whenSigned {
+    function setTreasuryWallet(address _wallet) external onlyOwner {
         require(treasurer != _wallet, "REED: Wallet is the same");
         treasurer = _wallet;
     }
 
-    function treasuryBill() external lockTheSwap onlyOwner whenSigned {
-        uint256 amountToSwap = balanceOf(address(this)).div(_getRate());
-        require(amountToSwap > 0, "REED: No REED token in contract");
-        address[] memory path = new address[](2);
-        path[0] = address(this);
-        path[1] = uniswapV2Router.WETH();
-        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
-            amountToSwap,
-            0,
-            path,
-            treasurer,
-            block.timestamp
-        );
-    }
-
     // relatively clean up contract
-    // send all token to owner
-    // send trapped BNB to owner
-    // does not kill contract
-    function _flush() private {
+    // send all stuck REED token to Treasury
+    function flush() external onlyOwner {
         uint256 token_bal = balanceOf(address(this));
         if (token_bal > 0) {
             _approve(address(this), treasurer, token_bal);
             _tokenTransfer(address(this), treasurer, token_bal, false);
         }
+        emit FlushReed(token_bal);
+    }
+
+    // Get all stuck BNB funds to the treasury
+    function fundTreasury() external onlyOwner {
         uint256 bnb_bal = address(this).balance;
         if (bnb_bal > 0) {
             payable(treasurer).transfer(bnb_bal);
         }
-        emit Flush(token_bal, bnb_bal);
-    }
-
-    // execute a contract flush
-    function flush() external onlyOwner whenSigned {
-        _flush();
-    }
-
-    // Get tokens that are on the contract
-    function getERC20Tokens(IERC20 _token) external onlyOwner whenSigned {
-        uint256 amount = _token.balanceOf(address(this));
-        _token.safeTransfer(treasurer, amount);
-        emit Transfer(address(this), treasurer, amount);
-    }
-
-    function fundTreasury() external onlyOwner whenSigned {
-        payable(treasurer).transfer(address(this).balance);
-    }
-
-    // Add signature to allow owner use
-    // treasury transactional functions
-    function signTreasury() external canSign {
-        _signers[_msgSender()] = true;
-        emit TreasurySinged(_msgSender());
-    }
-
-    // is account a registered signer
-    // only owner / developer / treasurer
-    // are registered signers
-    function isSigner(address _account) private view returns (bool) {
-        bool yesOrNo = (_account == _owner ||
-            _account == treasurer ||
-            _account == developer);
-        return yesOrNo;
+        emit Flush(bnb_bal);
     }
 }
